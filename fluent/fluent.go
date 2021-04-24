@@ -15,8 +15,9 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/binary"
-	"github.com/tinylib/msgp/msgp"
 	"math/rand"
+
+	"github.com/tinylib/msgp/msgp"
 )
 
 const (
@@ -71,7 +72,9 @@ type msgToSend struct {
 type Fluent struct {
 	Config
 
+	mutex   sync.Mutex
 	pending chan *msgToSend
+	closed  bool
 	wg      sync.WaitGroup
 
 	muconn sync.Mutex
@@ -293,7 +296,10 @@ func (f *Fluent) EncodeData(tag string, tm time.Time, message interface{}) (msg 
 // Close closes the connection, waiting for pending logs to be sent
 func (f *Fluent) Close() (err error) {
 	if f.Config.Async {
+		f.mutex.Lock()
 		close(f.pending)
+		f.closed = true
+		f.mutex.Unlock()
 		f.wg.Wait()
 	}
 	f.close()
@@ -302,6 +308,11 @@ func (f *Fluent) Close() (err error) {
 
 // appendBuffer appends data to buffer with lock.
 func (f *Fluent) appendBuffer(msg *msgToSend) error {
+	f.mutex.Lock()
+	defer f.mutex.Unlock()
+	if f.closed {
+		return fmt.Errorf("fluent#appendBuffer: Buffer channel is closed")
+	}
 	select {
 	case f.pending <- msg:
 	default:
